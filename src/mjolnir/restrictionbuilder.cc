@@ -355,41 +355,39 @@ void build(const std::string& complex_restriction_from_file,
                  (restriction = *res_it).from() == edge_info.wayid()) {
             ++res_it;
 
-            if (restriction.type() < RestrictionType::kOnlyRightTurn ||
-                restriction.type() > RestrictionType::kOnlyStraightOn) {
+            GraphId currentNode = directededge.endnode();
 
-              GraphId currentNode = directededge.endnode();
+            std::vector<uint64_t> res_way_ids;
+            res_way_ids.push_back(restriction.from());
 
-              std::vector<uint64_t> res_way_ids;
-              res_way_ids.push_back(restriction.from());
+            for (const auto& v : restriction.vias()) {
+              res_way_ids.push_back(v);
+            }
 
-              for (const auto& v : restriction.vias()) {
-                res_way_ids.push_back(v);
-              }
+            // if via = restriction.to then don't add to the res_way_ids vector.  This happens
+            // when we have a restriction:<type> with a via as a node in the osm data.
+            if (restriction.vias().size() != 1 || restriction.vias().at(0) != restriction.to()) {
+              res_way_ids.push_back(restriction.to());
+            }
 
-              // if via = restriction.to then don't add to the res_way_ids vector.  This happens
-              // when we have a restriction:<type> with a via as a node in the osm data.
-              if (restriction.vias().size() != 1 || restriction.vias().at(0) != restriction.to()) {
-                res_way_ids.push_back(restriction.to());
-              }
+            // walk in the forward direction.
+            std::deque<GraphId> tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
 
-              // walk in the forward direction.
-              std::deque<GraphId> tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
-
-              // now that we have the tile and currentNode walk in the reverse direction as this is
-              // really what needs to be stored in this tile.
-              if (tmp_ids.size()) {
+            // now that we have the tile and currentNode walk in the reverse direction as this is
+            // really what needs to be stored in this tile.
+            if (tmp_ids.size()) {
+              auto goBackwards = [&](std::vector<uint64_t> res_way_ids, GraphId currentNode,
+                                     GraphId tileid) {
                 std::reverse(res_way_ids.begin(), res_way_ids.end());
-                tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
+                auto tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
 
                 if (tmp_ids.size() && tmp_ids.back().Tile_Base() == tile_id) {
-
                   std::vector<GraphId> vias(tmp_ids.begin() + 1, tmp_ids.end() - 1);
 
                   if (vias.size() > kMaxViasPerRestriction) {
                     LOG_WARN("Tried to exceed max vias per restriction(forward).  Way: " +
                              std::to_string(tmp_ids.at(0)));
-                    continue;
+                    return;
                   }
 
                   // flip the vias because we walk backwards from the search direction
@@ -419,6 +417,45 @@ void build(const std::string& complex_restriction_from_file,
                     reverse_count++;
                   }
                 }
+              };
+              if (restriction.type() < RestrictionType::kOnlyRightTurn ||
+                  restriction.type() > RestrictionType::kOnlyStraightOn) {
+                goBackwards(res_way_ids, currentNode, tileid);
+              } else {
+                while (tmp_ids.size() > 1) {
+                  GraphId last_edge = *tmp_ids.rbegin();
+                  GraphId pre_last = *std::next(tmp_ids.rbegin());
+
+                  auto pre_last_tile = reader.GetGraphTile(pre_last);
+                  auto pre_last_edge = pre_last_tile->directededge(pre_last);
+
+                  auto end_node = pre_last_edge->endnode();
+                  auto last_tile = reader.GetGraphTile(end_node);
+                  auto node_info = last_tile->node(end_node);
+                  GraphId edge_id(last_tile->id().tileid(), last_tile->id().level(),
+                                  node_info->edge_index());
+                  for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
+                    if (edge_id != last_edge) {
+                      tmp_ids.back() = edge_id;
+                      goBackwards(res_way_ids, last_tile->directededge(edge_id)->endnode(), last_tile->id());
+                    }
+                  }
+                  for (const auto& trans : last_tile->GetNodeTransitions(node_info)) {
+                    auto to_node = trans.endnode();
+                    auto to_tile = reader.GetGraphTile(to_node);
+                    auto to_node_info = to_tile->node(to_node);
+                    GraphId edge_id(to_tile->id().tileid(), to_tile->id().level(),
+                                    to_node_info->edge_index());
+                    for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
+                      if (edge_id != last_edge) {
+                        tmp_ids.back() = edge_id;
+                        goBackwards(res_way_ids, to_tile->directededge(edge_id)->endnode(), to_tile->id());
+                      }
+                    }
+                  }
+                  tmp_ids.pop_back();
+                }
+
               }
             }
           }
@@ -448,45 +485,43 @@ void build(const std::string& complex_restriction_from_file,
                    (restriction = *res_it).from() == restriction_to.to()) {
               ++res_it;
 
-              if (restriction.type() < RestrictionType::kOnlyRightTurn ||
-                  restriction.type() > RestrictionType::kOnlyStraightOn) {
+              GraphId currentNode = directededge.endnode();
 
-                GraphId currentNode = directededge.endnode();
+              std::vector<uint64_t> res_way_ids;
+              res_way_ids.push_back(restriction.to());
 
-                std::vector<uint64_t> res_way_ids;
-                res_way_ids.push_back(restriction.to());
+              std::vector<uint64_t> temp_vias = restriction.vias();
+              std::reverse(temp_vias.begin(), temp_vias.end());
 
-                std::vector<uint64_t> temp_vias = restriction.vias();
-                std::reverse(temp_vias.begin(), temp_vias.end());
-
-                // if via = restriction.to then don't add to the res_way_ids vector.  This
-                // happens
-                // when we have a restriction:<type> with a via as a node in the osm data.
-                if (restriction.vias().size() > 1 || restriction.vias().at(0) != restriction.to()) {
-                  for (const auto& v : temp_vias) {
-                    res_way_ids.push_back(v);
-                  }
+              // if via = restriction.to then don't add to the res_way_ids vector.  This
+              // happens
+              // when we have a restriction:<type> with a via as a node in the osm data.
+              if (restriction.vias().size() > 1 || restriction.vias().at(0) != restriction.to()) {
+                for (const auto& v : temp_vias) {
+                  res_way_ids.push_back(v);
                 }
+              }
 
-                res_way_ids.push_back(restriction.from());
+              res_way_ids.push_back(restriction.from());
 
-                // walk in the forward direction (reverse in relation to the restriction)
-                std::deque<GraphId> tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
+              // walk in the forward direction (reverse in relation to the restriction)
+              std::deque<GraphId> tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
 
-                // now that we have the tile and currentNode walk in the reverse
-                // direction(forward in relation to the restriction) as this is really what
-                // needs to be stored in this tile.
-                if (tmp_ids.size()) {
-                  std::reverse(res_way_ids.begin(), res_way_ids.end());
-                  tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
+              // now that we have the tile and currentNode walk in the reverse
+              // direction(forward in relation to the restriction) as this is really what
+              // needs to be stored in this tile.
+              if (tmp_ids.size()) {
+                std::reverse(res_way_ids.begin(), res_way_ids.end());
+                tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
 
-                  if (tmp_ids.size() && tmp_ids.back().Tile_Base() == tile_id) {
+                if (tmp_ids.size() && tmp_ids.back().Tile_Base() == tile_id) {
+                  auto addForwardRestriction = [&](const std::deque<GraphId>& tmp_ids) {
                     std::vector<GraphId> vias(tmp_ids.begin() + 1, tmp_ids.end() - 1);
 
                     if (vias.size() > kMaxViasPerRestriction) {
                       LOG_WARN("Tried to exceed max vias per restriction(reverse).  Way: " +
                                std::to_string(tmp_ids.at(0)));
-                      continue;
+                      return;
                     }
 
                     std::reverse(vias.begin(), vias.end());
@@ -512,7 +547,47 @@ void build(const std::string& complex_restriction_from_file,
                       tilebuilder.AddForwardComplexRestriction(complex_restriction);
                       forward_count++;
                     }
+                  };
+
+                  if (restriction.type() < RestrictionType::kOnlyRightTurn ||
+                      restriction.type() > RestrictionType::kOnlyStraightOn) {
+                    addForwardRestriction(tmp_ids);
+                  } else {
+                    while (tmp_ids.size() > 1) {
+                      GraphId last_edge = *tmp_ids.rbegin();
+                      GraphId pre_last = *std::next(tmp_ids.rbegin());
+
+                      auto pre_last_tile = reader.GetGraphTile(pre_last);
+                      auto pre_last_edge = pre_last_tile->directededge(pre_last);
+
+                      auto end_node = pre_last_edge->endnode();
+                      auto last_tile = reader.GetGraphTile(end_node);
+                      auto node_info = last_tile->node(end_node);
+                      GraphId edge_id(last_tile->id().tileid(), last_tile->id().level(),
+                                      node_info->edge_index());
+                      for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
+                        if (edge_id != last_edge) {
+                          tmp_ids.back() = edge_id;
+                          addForwardRestriction(tmp_ids);
+                        }
+                      }
+                      for (const auto& trans : last_tile->GetNodeTransitions(node_info)) {
+                        auto to_node = trans.endnode();
+                        auto to_tile = reader.GetGraphTile(to_node);
+                        auto to_node_info = to_tile->node(to_node);
+                        GraphId edge_id(to_tile->id().tileid(), to_tile->id().level(),
+                                        to_node_info->edge_index());
+                        for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
+                          if (edge_id != last_edge) {
+                            tmp_ids.back() = edge_id;
+                            addForwardRestriction(tmp_ids);
+                          }
+                        }
+                      }
+                      tmp_ids.pop_back();
+                    }
                   }
+
                 }
               }
             }
