@@ -423,39 +423,69 @@ void build(const std::string& complex_restriction_from_file,
                 goBackwards(res_way_ids, currentNode, tileid);
               } else {
                 while (tmp_ids.size() > 1) {
-                  GraphId last_edge = *tmp_ids.rbegin();
-                  GraphId pre_last = *std::next(tmp_ids.rbegin());
+                  GraphId last_edge_id = *tmp_ids.rbegin();
+                  auto last_tile = reader.GetGraphTile(last_edge_id);
+                  auto last_way_id =
+                      last_tile->edgeinfo(last_tile->directededge(last_edge_id)->edgeinfo_offset())
+                          .wayid();
 
-                  auto pre_last_tile = reader.GetGraphTile(pre_last);
-                  auto pre_last_edge = pre_last_tile->directededge(pre_last);
+                  GraphId pre_last_edge_id = *std::next(tmp_ids.rbegin());
+                  auto pre_last_tile = reader.GetGraphTile(pre_last_edge_id);
+                  auto pre_last_edge = pre_last_tile->directededge(pre_last_edge_id);
+                  auto pre_last_way_id =
+                      pre_last_tile->edgeinfo(pre_last_edge->edgeinfo_offset()).wayid();
+                  if (pre_last_way_id != res_way_ids.back())
+                    res_way_ids.pop_back();
 
                   auto end_node = pre_last_edge->endnode();
-                  auto last_tile = reader.GetGraphTile(end_node);
-                  auto node_info = last_tile->node(end_node);
-                  GraphId edge_id(last_tile->id().tileid(), last_tile->id().level(),
+                  auto end_node_tile = reader.GetGraphTile(end_node);
+                  auto node_info = end_node_tile->node(end_node);
+                  GraphId edge_id(end_node_tile->id().tileid(), end_node_tile->id().level(),
                                   node_info->edge_index());
                   for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
-                    if (edge_id != last_edge) {
-                      tmp_ids.back() = edge_id;
-                      goBackwards(res_way_ids, last_tile->directededge(edge_id)->endnode(), last_tile->id());
+                    if (edge_id != last_edge_id) {
+                      auto way_id =
+                          end_node_tile
+                              ->edgeinfo(end_node_tile->directededge(edge_id)->edgeinfo_offset())
+                              .wayid();
+                      bool add = false;
+                      if (res_way_ids.back() != way_id) {
+                        add = true;
+                        res_way_ids.push_back(way_id);
+                      }
+                      goBackwards(res_way_ids, end_node_tile->directededge(edge_id)->endnode(),
+                                  end_node_tile->id());
+                      if (add) {
+                        res_way_ids.pop_back();
+                      }
                     }
                   }
-                  for (const auto& trans : last_tile->GetNodeTransitions(node_info)) {
+                  for (const auto& trans : end_node_tile->GetNodeTransitions(node_info)) {
                     auto to_node = trans.endnode();
                     auto to_tile = reader.GetGraphTile(to_node);
                     auto to_node_info = to_tile->node(to_node);
                     GraphId edge_id(to_tile->id().tileid(), to_tile->id().level(),
                                     to_node_info->edge_index());
-                    for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
-                      if (edge_id != last_edge) {
-                        tmp_ids.back() = edge_id;
-                        goBackwards(res_way_ids, to_tile->directededge(edge_id)->endnode(), to_tile->id());
+                    for (size_t i = 0; i < to_node_info->edge_count(); ++i, ++edge_id) {
+                      if (edge_id != last_edge_id) {
+                        auto way_id =
+                            to_tile->edgeinfo(to_tile->directededge(edge_id)->edgeinfo_offset())
+                                .wayid();
+                        bool add = false;
+                        if (res_way_ids.back() != way_id) {
+                          add = true;
+                          res_way_ids.push_back(way_id);
+                        }
+                        goBackwards(res_way_ids, to_tile->directededge(edge_id)->endnode(),
+                                    to_tile->id());
+                        if (add) {
+                          res_way_ids.pop_back();
+                        }
                       }
                     }
                   }
                   tmp_ids.pop_back();
                 }
-
               }
             }
           }
@@ -577,7 +607,7 @@ void build(const std::string& complex_restriction_from_file,
                         auto to_node_info = to_tile->node(to_node);
                         GraphId edge_id(to_tile->id().tileid(), to_tile->id().level(),
                                         to_node_info->edge_index());
-                        for (size_t i = 0; i < node_info->edge_count(); ++i, ++edge_id) {
+                        for (size_t i = 0; i < to_node_info->edge_count(); ++i, ++edge_id) {
                           if (edge_id != last_edge) {
                             tmp_ids.back() = edge_id;
                             addForwardRestriction(tmp_ids);
@@ -587,7 +617,6 @@ void build(const std::string& complex_restriction_from_file,
                       tmp_ids.pop_back();
                     }
                   }
-
                 }
               }
             }
