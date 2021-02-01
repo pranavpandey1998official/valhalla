@@ -376,8 +376,7 @@ void build(const std::string& complex_restriction_from_file,
             // now that we have the tile and currentNode walk in the reverse direction as this is
             // really what needs to be stored in this tile.
             if (tmp_ids.size()) {
-              auto goBackwards = [&](std::vector<uint64_t> res_way_ids, GraphId currentNode,
-                                     GraphId tileid) {
+              auto goBackwards = [&](std::vector<uint64_t> res_way_ids, GraphId currentNode) {
                 std::reverse(res_way_ids.begin(), res_way_ids.end());
                 auto tmp_ids = GetGraphIds(currentNode, reader, lock, res_way_ids);
 
@@ -420,7 +419,7 @@ void build(const std::string& complex_restriction_from_file,
               };
               if (restriction.type() < RestrictionType::kOnlyRightTurn ||
                   restriction.type() > RestrictionType::kOnlyStraightOn) {
-                goBackwards(res_way_ids, currentNode, tileid);
+                goBackwards(res_way_ids, currentNode);
               } else {
                 while (tmp_ids.size() > 1) {
                   GraphId last_edge_id = *tmp_ids.rbegin();
@@ -453,8 +452,7 @@ void build(const std::string& complex_restriction_from_file,
                         add = true;
                         res_way_ids.push_back(way_id);
                       }
-                      goBackwards(res_way_ids, end_node_tile->directededge(edge_id)->endnode(),
-                                  end_node_tile->id());
+                      goBackwards(res_way_ids, end_node_tile->directededge(edge_id)->endnode());
                       if (add) {
                         res_way_ids.pop_back();
                       }
@@ -476,8 +474,7 @@ void build(const std::string& complex_restriction_from_file,
                           add = true;
                           res_way_ids.push_back(way_id);
                         }
-                        goBackwards(res_way_ids, to_tile->directededge(edge_id)->endnode(),
-                                    to_tile->id());
+                        goBackwards(res_way_ids, to_tile->directededge(edge_id)->endnode());
                         if (add) {
                           res_way_ids.pop_back();
                         }
